@@ -14,9 +14,11 @@ function M = root_finder_mach_number(gamma, tol, M0, A, At, isSupersonic)
     f = @(M) (1./M).*((2/(gamma+1))*(1+((gamma-1)/2)*M.^2)).^n - AR_target;
 
     if isSupersonic
+        branch = 'supersonic';
         lower = 1 + 1e-6;
         upper = 60;
     else
+        branch = 'subsonic';
         lower = 1e-6;
         upper = 1 - 1e-6;
     end
@@ -30,8 +32,10 @@ function M = root_finder_mach_number(gamma, tol, M0, A, At, isSupersonic)
             fhi = f(upper);
         end
         if sign(flo) == sign(fhi)
-            M = M0;
-            return;
+            error('nozzle:MachSolve', ...
+                ['No %s Mach number satisfies A/At = %.6g (bracket [%g, %g] ' ...
+                 'does not contain a root; A/At must be >= 1).'], ...
+                branch, AR_target, lower, upper);
         end
     end
 
@@ -39,6 +43,7 @@ function M = root_finder_mach_number(gamma, tol, M0, A, At, isSupersonic)
     try
         M = fzero(f, [lower, upper], opts);
     catch ME
-        M = M0;
+        error('nozzle:MachSolve', 'fzero failed on the %s branch for A/At = %.6g: %s', ...
+            branch, AR_target, ME.message);
     end
 end

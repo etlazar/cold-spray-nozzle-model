@@ -4,6 +4,8 @@ from mlutil import Progress
 
 
 def _cd(Rep):
+    if Rep == 0:
+        return np.inf             # Stokes limit; the drag force itself -> 0
     return (24.0 / Rep) * (1 + 0.15 * Rep ** 0.687) + 0.42 / (1 + 4.25e4 * Rep ** -1.16)
 
 
@@ -20,6 +22,9 @@ def rk4_vp(gas_density, v, dp, h, x, viscosity, p_density, vp0, verbose=True,
     Ap = np.pi * (dp / 2) ** 2
 
     def dvp(Cd_, rho, v_, vp_):
+        # Zero slip (e.g. vp0 = gas velocity): no drag, and avoids inf * 0
+        if v_ == vp_:
+            return 0.0
         return (Cd_ * rho * Ap) / (2 * mp * vp_) * abs(v_ - vp_) * (v_ - vp_)
 
     N = x.size - 1

@@ -2,6 +2,10 @@ import numpy as np
 from scipy.optimize import brentq
 
 
+class MachSolveError(RuntimeError):
+    """The area-Mach relation could not be solved at a grid point."""
+
+
 def root_finder_mach_number(gamma, tol, M0, A, At, is_supersonic=None):
     if is_supersonic is None:
         is_supersonic = M0 > 1
@@ -14,6 +18,8 @@ def root_finder_mach_number(gamma, tol, M0, A, At, is_supersonic=None):
 
     def f(M):
         return (1.0 / M) * ((2 / (gamma + 1)) * (1 + ((gamma - 1) / 2) * M ** 2)) ** n - ar_target
+
+    branch = 'supersonic' if is_supersonic else 'subsonic'
 
     if is_supersonic:
         lower, upper = 1 + 1e-6, 60.0
@@ -28,9 +34,13 @@ def root_finder_mach_number(gamma, tol, M0, A, At, is_supersonic=None):
             upper = 500.0
             fhi = f(upper)
         if np.sign(flo) == np.sign(fhi):
-            return M0
+            raise MachSolveError(
+                f'No {branch} Mach number satisfies A/At = {ar_target:.6g} '
+                f'(bracket [{lower:g}, {upper:g}] does not contain a root; '
+                'A/At must be >= 1).')
 
     try:
         return brentq(f, lower, upper, xtol=tol)
-    except (ValueError, RuntimeError):
-        return M0
+    except (ValueError, RuntimeError) as e:
+        raise MachSolveError(
+            f'brentq failed on the {branch} branch for A/At = {ar_target:.6g}: {e}') from e

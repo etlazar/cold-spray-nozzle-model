@@ -5,12 +5,13 @@ from dataclasses import replace
 import numpy as np
 
 from find_property import find_property
-from mach_number_distribution import normal_shock
-from solver import Params, solve
+from mach_number_distribution import ShockPlacementError, normal_shock
+from root_finder_mach_number import MachSolveError, root_finder_mach_number
+from solver import P_ATM, PSI_TO_PA, Params, solve
 
 GAMMA = 1.4
 R = 296.8
-P0 = 200 * 6895          # Pa
+P0 = 200 * PSI_TO_PA     # Pa
 T0 = 200 + 273.15        # K
 RHO0 = P0 / (R * T0)
 M_EXIT = 2.859
@@ -102,6 +103,87 @@ class TestSolver(unittest.TestCase):
 
     def test_prandtl_everywhere(self):
         self.assertTrue(np.all((self.r.Pr > 0.65) & (self.r.Pr < 0.80)))
+
+
+class TestSmallParticleTracksGas(unittest.TestCase):
+    """A 0.1 um particle has a tiny relaxation time, so up to the nozzle exit it
+    should follow the gas. It is very stiff: h = 0.001 mm with vp0 = gas velocity
+    is needed for the temperature RK4 to stay stable."""
+
+    @classmethod
+    def setUpClass(cls):
+        p = replace(Params(), dp10=0.1, dp50=0.1, dp90=0.1, vp0=None,
+                    h=0.001, bow_shock=False)
+        cls.p = p
+        cls.r = solve(p, verbose=False)
+        cls.d = cls.r.particles['D10']
+
+    def test_tracks_gas_to_exit(self):
+        r, d, p = self.r, self.d, self.p
+        x = r.x
+        # Skip the initial Tp relaxation and the sonic kinks at the throat ends,
+        # where dv/dx of the quasi-1D gas solution is unbounded
+        window = (x >= p.Li + p.Lc - 1) & (x <= p.Li + p.Lc + p.Lt + 1)
+        s = (x >= 0.05) & (np.arange(x.size) <= r.exit_index) & ~window
+        rel_dv = np.abs(d['vp'][s] - r.v[s]) / r.v[s]
+        dT = np.abs(d['Tp'][s] - r.temp[s])
+        self.assertLess(rel_dv.max(), 0.02)
+        self.assertLess(dT.max(), 0.5)
+
+    def test_exit_state(self):
+        e = self.r.exit_index
+        self.assertAlmostEqual(self.d['vp'][e] / self.r.v[e], 1.0, delta=5e-4)
+        self.assertAlmostEqual(self.d['Tp'][e], self.r.temp[e], delta=0.1)
+
+
+class TestMachSolveErrors(unittest.TestCase):
+    def test_root_finder_raises(self):
+        # A/At < 1 has no solution on either branch
+        for supersonic in (False, True):
+            with self.assertRaises(MachSolveError):
+                root_finder_mach_number(GAMMA, 1e-5, 1.5, 0.5, 1.0, supersonic)
+
+    def test_solve_reports_position(self):
+        # Exit narrower than the throat: the diverging section has A/At < 1
+        with self.assertRaises(MachSolveError) as cm:
+            solve(replace(Params(), De=1.5, h=0.1), verbose=False)
+        msg = str(cm.exception)
+        self.assertIn('x =', msg)
+        self.assertIn('A/At', msg)
+
+
+class TestShockPlacement(unittest.TestCase):
+    def test_standoff_shorter_than_shock_raises(self):
+        # L_shock = 0.143 * 3.81 * exp(3.24 / 2.859^2) ~ 0.81 mm > Ls
+        with self.assertRaises(ShockPlacementError):
+            solve(replace(Params(), Ls=0.5, h=0.01), verbose=False)
+
+    def test_no_shock_no_check(self):
+        r = solve(replace(Params(), Ls=0.5, h=0.01, bow_shock=False), verbose=False)
+        self.assertIsNone(r.shock_index)
+
+    def test_radius_halves_standoff(self):
+        rd = solve(replace(Params(), h=0.01), verbose=False)
+        rr = solve(replace(Params(), h=0.01, standoff_length_scale='radius'), verbose=False)
+        L_d = rd.x[-1] - rd.x[rd.shock_index]
+        L_r = rr.x[-1] - rr.x[rr.shock_index]
+        self.assertAlmostEqual(L_d, 0.81, delta=0.01)
+        self.assertAlmostEqual(L_r, L_d / 2, delta=0.01)
+
+    def test_bad_length_scale(self):
+        with self.assertRaises(ValueError):
+            solve(replace(Params(), h=0.1, standoff_length_scale='width'), verbose=False)
+
+
+class TestGaugePressure(unittest.TestCase):
+    def test_gauge_adds_one_atmosphere(self):
+        p = replace(Params(), h=0.05, vp0=None)
+        r_abs = solve(p, verbose=False)
+        r_g = solve(replace(p, pressure_is_gauge=True), verbose=False)
+        self.assertAlmostEqual(r_abs.pressure0, 200 * 6894.757, places=6)
+        self.assertAlmostEqual(r_g.pressure0 - r_abs.pressure0, P_ATM, places=6)
+        # Isentropic Mach distribution does not depend on p0
+        np.testing.assert_array_equal(r_g.M, r_abs.M)
 
 
 if __name__ == '__main__':

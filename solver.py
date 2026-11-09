@@ -9,6 +9,10 @@ from mlutil import colon
 from rk4_tp import rk4_tp
 from rk4_vp import rk4_vp
 
+PSI_TO_PA = 6894.757
+P_ATM = 101325.0              # Pa
+VP0_REST = 0.1                # m/s, particles start (almost) at rest
+
 
 @dataclass
 class Params:
@@ -24,6 +28,7 @@ class Params:
 
     # Gas Parameters
     pressure0: float = 200.0      # psi
+    pressure_is_gauge: bool = False   # True: pressure0 is psig, add 1 atm
     temp0: float = 200.0          # C
     gamma: float = 1.4
     cp: float = 1.04              # kJ/kg·K
@@ -38,7 +43,7 @@ class Params:
     dp50: float = 10.0            # μm
     dp90: float = 30.0            # μm
     psi: float = 0.5
-    vp0: float = 0.1              # m/s
+    vp0: float | None = VP0_REST  # m/s; None starts particles at the inlet gas velocity
     p_temp0: float = 25.0         # C
     cp_par: float = 227.0
 
@@ -46,8 +51,11 @@ class Params:
     h: float = 0.001              # mm
     int_M0: float = 0.03
     post_throat_M0: float = 1.05
-    tol: float = 10e-5
+    tol: float = 1e-5
     bow_shock: bool = True
+    # Exit dimension used in Billig's bow-shock standoff correlation:
+    # 'diameter' (De) or 'radius' (De / 2)
+    standoff_length_scale: str = 'diameter'
 
 
 @dataclass
@@ -65,6 +73,7 @@ class Results:
     exit_index: int
     shock_index: int | None       # first grid point behind the bow shock
     particles: dict = field(default_factory=dict)
+    pressure0: float | None = None    # absolute stagnation pressure used [Pa]
 
 
 def solve(p=None, verbose=True, progress=None):
@@ -87,7 +96,9 @@ def solve(p=None, verbose=True, progress=None):
     t_start = time.perf_counter()
 
     # Consolidations, Calculations, and Conversions
-    pressure0 = p.pressure0 * 6895
+    pressure0 = p.pressure0 * PSI_TO_PA
+    if p.pressure_is_gauge:
+        pressure0 += P_ATM
     temp0 = p.temp0 + 273.15
     dp = {'D10': p.dp10 * 1e-6, 'D50': p.dp50 * 1e-6, 'D90': p.dp90 * 1e-6}
     p_temp0 = p.p_temp0 + 273.15
@@ -102,7 +113,8 @@ def solve(p=None, verbose=True, progress=None):
     report(0, 'Solving Mach distribution...')
     M, exit_index, shock_index = mach_number_distribution(
         nozzle_geometry, x, p.gamma, p.int_M0, p.post_throat_M0, p.tol,
-        p.bow_shock, verbose, sub_report(0, 'Solving Mach distribution...'))
+        p.bow_shock, verbose, sub_report(0, 'Solving Mach distribution...'),
+        p.standoff_length_scale)
 
     # Find the properties of the gas
     report(1, 'Computing gas properties...')
@@ -124,6 +136,10 @@ def solve(p=None, verbose=True, progress=None):
     kg = find_property('kg', 0, temp)
     Pr = find_property('Pr', 0, [viscosity, kg], cp)
 
+    # dvp/dx ~ 1/vp, so starting near rest makes the first steps stiff;
+    # vp0 = None starts the particles at the local gas velocity instead
+    vp0 = v[0] if p.vp0 is None else p.vp0
+
     particles = {}
     for k, (name, d) in enumerate(dp.items()):
         if verbose:
@@ -133,7 +149,7 @@ def solve(p=None, verbose=True, progress=None):
         msg = f'Particle velocity: {name}...'
         report(2 + 2 * k, msg)
         Rep, Cd, vp = rk4_vp(gas_density, v, d, p.h, x, viscosity,
-                             p.p_density, p.vp0, verbose, sub_report(2 + 2 * k, msg))
+                             p.p_density, vp0, verbose, sub_report(2 + 2 * k, msg))
         Nu = find_property('Nu', 0, [Rep, Pr])
         hp = find_property('hp', 0, [Nu, kg], d)
 
@@ -154,7 +170,7 @@ def solve(p=None, verbose=True, progress=None):
                    gas_density=gas_density, v=v, viscosity=viscosity,
                    kg=kg, Pr=Pr, nozzle_geometry=nozzle_geometry,
                    exit_index=exit_index, shock_index=shock_index,
-                   particles=particles)
+                   particles=particles, pressure0=pressure0)
 
 
 def plot_results(r, h=0.001):

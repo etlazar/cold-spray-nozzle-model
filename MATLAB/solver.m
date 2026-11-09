@@ -13,6 +13,7 @@ De = 3.81; % mm
 
 % Gas Parameters
 pressure0 = 900; % psi
+pressure_is_gauge = false; % true: pressure0 is psig, 1 atm is added
 temp0 = 650; % C
 gamma = 1.4;
 cp = 1.04; % kJ/kg*K
@@ -28,7 +29,7 @@ dp10 = 2; % μm
 dp50 = 10; % μm
 dp90 = 30; % μm
 psi = 0.5;
-vp0 = 0.1; % m/s
+vp0 = 0.1; % m/s ([] = start at the inlet gas velocity)
 p_temp0 = 25; % C
 % ult_strength = 16; % MPa
 % melting_temp = 250; % C
@@ -54,11 +55,15 @@ cp_par = 227;
 h = 0.001; % mm
 int_M0 = 0.03;
 post_throat_M0 = 1.05;
-tol = 10e-5;
+tol = 1e-5;
 bow_shock = true;
+standoff_length_scale = 'diameter'; % exit dimension in Billig's correlation: 'diameter' or 'radius'
 
 % Consolidations, Calculations, and Conversions
-pressure0 = pressure0 * 6895;
+pressure0 = pressure0 * 6894.757;
+if pressure_is_gauge
+    pressure0 = pressure0 + 101325;
+end
 temp0 = temp0 + 273.15;
 dp10 = dp10*10^(-6);
 dp50 = dp50*10^(-6);
@@ -77,7 +82,12 @@ nStages = 9;
 
 % Find the mach number distribution
 waitbar(0/nStages, wb, 'Solving Mach distribution...');
-[M, exit_index, shock_index] = mach_number_ditribustion(nozzle_geometry,x,gamma,int_M0,post_throat_M0,tol,bow_shock);
+try
+    [M, exit_index, shock_index] = mach_number_ditribustion(nozzle_geometry,x,gamma,int_M0,post_throat_M0,tol,bow_shock,standoff_length_scale);
+catch ME
+    close(wb);
+    rethrow(ME);
+end
 
 % Find the properties of the gas
 waitbar(1/nStages, wb, 'Computing gas properties...');
@@ -96,6 +106,11 @@ if ~isempty(shock_index)
     gas_density(post) = find_property('density',gas_density0*p0_ratio,M(post),gamma);
 end
 
+% dvp/dx ~ 1/vp, so starting near rest makes the first steps stiff;
+% vp0 = [] starts the particles at the local gas velocity instead
+if isempty(vp0)
+    vp0 = v(1);
+end
 
 % Find the velocity of the particles
 waitbar(2/nStages, wb, 'Particle velocity: D10...');
@@ -140,6 +155,29 @@ waitbar(1, wb, 'Done');
 pause(0.3);
 close(wb);
 fprintf('Total time: %.2f s\n', toc);
+
+% Explicit RK4 goes unstable for small particles when the step is too large.
+% Physically vp stays in [0, ~v_max] and Tp between the coldest of (its start,
+% the gas) and the stagnation temperature T0 (1 K tolerance).
+Tp_tol = 1;
+Tp_min = min(min(temp), p_temp0) - Tp_tol;
+Tp_max = temp0 + Tp_tol;
+names = {'D10', 'D50', 'D90'};
+vps = {vp10, vp50, vp90};
+Tps = {Tp10, Tp50, Tp90};
+unstable = {};
+for k = 1:3
+    if ~all(isfinite(vps{k})) || ~all(isfinite(Tps{k})) ...
+            || min(vps{k}) < 0 || max(vps{k}) > 1.5*max(v) ...
+            || min(Tps{k}) < Tp_min || max(Tps{k}) > Tp_max
+        unstable{end+1} = names{k}; %#ok<SAGROW>
+    end
+end
+if ~isempty(unstable)
+    warning('nozzle:Unstable', ['The particle solution for %s is unstable at a step size of %g mm ' ...
+        '(non-physical velocity or temperature). Reduce the step size (e.g. <= 0.005 mm) ' ...
+        'or set vp0 = [] and rerun.'], strjoin(unstable, ', '), h);
+end
 
 % Plot Nozzle
 plot_nozzle(nozzle_geometry,h);

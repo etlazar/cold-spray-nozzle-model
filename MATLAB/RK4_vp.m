@@ -6,7 +6,7 @@ vp(1) = vp0;
 h = h*1e-3;
 mp = p_density * (4/3) * pi * (dp/2)^3;
 Ap = pi * (dp/2)^2;
-dvp = @(Cd,rho,v,vp) (Cd*rho*Ap)/(2*mp*vp) * abs(v - vp) * (v - vp);
+dvp = @(Cd,rho,v,vp) dvp_fun(Cd,rho,v,vp,Ap,mp);
 Cd_fun = @(Rep) (24./Rep) .* (1 + 0.15.*Rep.^0.687) + 0.42 ./ (1 + 4.25e4.*Rep.^(-1.16));
 N = numel(x)-1;
 fprintf('Particle velocity:   0%%');
@@ -44,4 +44,13 @@ fprintf('\n');
 Rep(end) = gas_density(end) * abs(v(end) - vp(end)) * dp / viscosity(end);
 Cd(end)  = Cd_fun(Rep(end));
 out = [Rep; Cd; vp];
+end
+
+function a = dvp_fun(Cd,rho,v,vp,Ap,mp)
+% Zero slip (e.g. vp0 = gas velocity): no drag, and avoids Inf*0 = NaN
+if v == vp
+    a = 0;
+else
+    a = (Cd*rho*Ap)/(2*mp*vp) * abs(v - vp) * (v - vp);
+end
 end

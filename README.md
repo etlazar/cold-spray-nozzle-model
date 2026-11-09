@@ -30,7 +30,12 @@ python -m unittest test_model   # slow, runs the full solver
    - **Reported values (CSV)**: inputs, gas properties at the exit / bow shock, particle properties at the substrate.
    - **Full nozzle profile (CSV)**: every quantity at every grid point (~200,000 rows, ~50 MB, temperatures in K).
 
-**Note:** if the step size is too large for small particles, the RK4 solver goes unstable; the app warns you and suggests a smaller step.
+**Options:**
+- **gauge** (next to gas pressure): check if the pressure is psig; 1 atm (101325 Pa) is added. Unchecked = psia.
+- **Start particles at inlet gas velocity**: instead of 0.1 m/s. This removes the stiff start of the particle ODEs, so small particles stay stable at larger steps (D10 = 1 µm is stable at 0.01 mm).
+- `Params.standoff_length_scale` (`'diameter'` default, or `'radius'`): exit dimension used in the bow shock standoff correlation, 0.143·L·exp(3.24/M²).
+
+**Note:** if the step size is too large for small particles, the RK4 solver goes unstable (velocity outside [0, 1.5·v_max] or temperature outside [coldest gas / particle start, T0] ± 1 K); the app warns you and suggests a smaller step. A failed Mach solve (e.g. a nozzle section narrower than the throat) or a standoff distance shorter than the bow shock standoff stops the run with a message.
 
 ## Files
 ```

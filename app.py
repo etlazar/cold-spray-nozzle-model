@@ -21,8 +21,10 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
+from mach_number_distribution import ShockPlacementError
 from plot_nozzle import plot_nozzle
-from solver import Params, solve
+from root_finder_mach_number import MachSolveError
+from solver import VP0_REST, Params, solve
 
 # (attribute on Params, label, unit, min, max, decimals, step)
 INPUTS = {
@@ -47,6 +49,30 @@ INPUTS = {
 
 PARTICLES = ['D10', 'D50', 'D90']
 
+# Allowed overshoot of the particle temperature bounds before flagging instability
+TP_TOL = 1.0   # K
+
+
+def unstable_particles(r, p):
+    """Names of particles whose solution is non-physical.
+
+    Explicit RK4 goes unstable for small particles when the step is too large.
+    Physically vp stays in [0, ~v_max] and Tp between the coldest of (its start,
+    the gas) and the stagnation temperature T0.
+    """
+    v_max = np.nanmax(r.v)
+    Tp_min = min(np.nanmin(r.temp), p.p_temp0 + 273.15) - TP_TOL
+    Tp_max = p.temp0 + 273.15 + TP_TOL
+
+    def is_unstable(d):
+        vp, Tp = d['vp'], d['Tp']
+        if not (np.all(np.isfinite(vp)) and np.all(np.isfinite(Tp))):
+            return True
+        return (vp.min() < 0 or vp.max() > 1.5 * v_max
+                or Tp.min() < Tp_min or Tp.max() > Tp_max)
+
+    return [n for n in PARTICLES if is_unstable(r.particles[n])]
+
 
 def fmt_time(seconds):
     m, s = divmod(int(round(seconds)), 60)
@@ -56,7 +82,7 @@ def fmt_time(seconds):
 class SolverWorker(QObject):
     progress = Signal(float, str)
     finished = Signal(object, object)   # (results, params)
-    failed = Signal(str)
+    failed = Signal(str, str)           # (title, message)
 
     def __init__(self, params):
         super().__init__()
@@ -67,8 +93,12 @@ class SolverWorker(QObject):
             r = solve(self.params, verbose=False,
                       progress=lambda f, m: self.progress.emit(f, m))
             self.finished.emit(r, self.params)
+        except MachSolveError as e:
+            self.failed.emit('Mach solve failed', str(e))
+        except ShockPlacementError as e:
+            self.failed.emit('Bow shock placement', str(e))
         except Exception:
-            self.failed.emit(traceback.format_exc())
+            self.failed.emit('Solver error', traceback.format_exc())
 
 
 class PlotTab(QWidget):
@@ -112,7 +142,25 @@ class MainWindow(QMainWindow):
                 spin.setSuffix(f'  {unit}')
                 spin.setKeyboardTracking(False)
                 self.fields[attr] = spin
-                form.addRow(label, spin)
+                if attr == 'pressure0':
+                    # Gauge/absolute toggle sits beside the pressure input
+                    self.pressure_is_gauge = QCheckBox('gauge')
+                    self.pressure_is_gauge.setToolTip(
+                        'Checked: pressure is gauge (psig), 1 atm is added. '
+                        'Unchecked: absolute (psia).')
+                    self.pressure_is_gauge.setChecked(defaults.pressure_is_gauge)
+                    row = QHBoxLayout()
+                    row.addWidget(spin, 1)
+                    row.addWidget(self.pressure_is_gauge)
+                    form.addRow(label, row)
+                else:
+                    form.addRow(label, spin)
+            if group_name == 'Powder':
+                self.vp0_gas = QCheckBox('Start particles at inlet gas velocity')
+                self.vp0_gas.setToolTip(
+                    f'Unchecked: particles start at {VP0_REST:g} m/s.')
+                self.vp0_gas.setChecked(defaults.vp0 is None)
+                form.addRow(self.vp0_gas)
             if group_name == 'Geometry / Solver':
                 self.bow_shock = QCheckBox('Use bow shock')
                 self.bow_shock.setChecked(defaults.bow_shock)
@@ -196,6 +244,8 @@ class MainWindow(QMainWindow):
     def read_params(self):
         values = {attr: spin.value() for attr, spin in self.fields.items()}
         values['bow_shock'] = self.bow_shock.isChecked()
+        values['pressure_is_gauge'] = self.pressure_is_gauge.isChecked()
+        values['vp0'] = None if self.vp0_gas.isChecked() else VP0_REST
         return replace(Params(), **values)
 
     def reset(self):
@@ -203,6 +253,8 @@ class MainWindow(QMainWindow):
         for attr, spin in self.fields.items():
             spin.setValue(getattr(defaults, attr))
         self.bow_shock.setChecked(defaults.bow_shock)
+        self.pressure_is_gauge.setChecked(defaults.pressure_is_gauge)
+        self.vp0_gas.setChecked(defaults.vp0 is None)
 
     def run(self):
         p = self.read_params()
@@ -247,10 +299,10 @@ class MainWindow(QMainWindow):
             self.progress.setFormat(f'%p%  —  {fmt_time(elapsed)} elapsed, estimating...')
         self.status.setText(msg)
 
-    def on_failed(self, tb):
+    def on_failed(self, title, msg):
         self.run_btn.setEnabled(True)
-        self.status.setText('Error')
-        QMessageBox.critical(self, 'Solver error', tb)
+        self.status.setText(f'Error: {title}')
+        QMessageBox.critical(self, title, msg)
 
     def on_finished(self, r, p):
         self.run_btn.setEnabled(True)
@@ -263,13 +315,7 @@ class MainWindow(QMainWindow):
         self.export_btn.setEnabled(True)
         self.export_profile_btn.setEnabled(True)
 
-        # Explicit RK4 goes unstable for small particles when the step is too large
-        v_max = np.nanmax(r.v)
-        unstable = [n for n in PARTICLES
-                    if not np.all(np.isfinite(r.particles[n]['vp']))
-                    or r.particles[n]['vp'].min() < 0
-                    or r.particles[n]['vp'].max() > 1.5 * v_max
-                    or not np.all(np.isfinite(r.particles[n]['Tp']))]
+        unstable = unstable_particles(r, p)
         if unstable:
             self.status.setText(f'Unstable solution for {", ".join(unstable)}')
             QMessageBox.warning(
@@ -398,7 +444,12 @@ class MainWindow(QMainWindow):
             for rows in INPUTS.values():
                 for attr, label, unit, *_ in rows:
                     w.writerow([label, unit, getattr(p, attr)])
+            w.writerow(['Gas pressure is gauge', '', p.pressure_is_gauge])
+            w.writerow(['Absolute gas pressure', 'Pa', f'{r.pressure0:.8g}'])
+            w.writerow(['Initial particle velocity', 'm/s',
+                        'inlet gas velocity' if p.vp0 is None else p.vp0])
             w.writerow(['Use bow shock', '', p.bow_shock])
+            w.writerow(['Bow shock standoff length scale', '', p.standoff_length_scale])
             w.writerow([])
             fmt = lambda row: [f'{v:.8g}' if not isinstance(v, str) else v for v in row]
             w.writerow(['Gas properties'])

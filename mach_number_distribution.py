@@ -1,7 +1,15 @@
 import numpy as np
 
 from mlutil import Progress
-from root_finder_mach_number import root_finder_mach_number
+from root_finder_mach_number import MachSolveError, root_finder_mach_number
+
+# Billig's standoff correlation, L_shock = 0.143 * L * exp(3.24 / M_exit^2):
+# which exit dimension L is ('diameter' -> De, 'radius' -> De / 2)
+STANDOFF_LENGTH_SCALES = {'diameter': 1.0, 'radius': 0.5}
+
+
+class ShockPlacementError(ValueError):
+    """The bow shock would sit upstream of the nozzle exit."""
 
 
 def local_diameter(x, g):
@@ -42,7 +50,12 @@ def normal_shock(M1, gamma):
 
 
 def mach_number_distribution(nozzle_geometry, x, gamma, M0sub, M0super, tol,
-                             bow_shock, verbose=True, on_progress=None):
+                             bow_shock, verbose=True, on_progress=None,
+                             standoff_length_scale='diameter'):
+    if standoff_length_scale not in STANDOFF_LENGTH_SCALES:
+        raise ValueError(f'standoff_length_scale must be one of '
+                         f'{list(STANDOFF_LENGTH_SCALES)}, got {standoff_length_scale!r}')
+
     g = np.asarray(nozzle_geometry, dtype=float)
     x = np.asarray(x, dtype=float)
 
@@ -73,7 +86,13 @@ def mach_number_distribution(nozzle_geometry, x, gamma, M0sub, M0super, tol,
         else:
             M0 = Mach[i - 1]
 
-        Mach[i] = root_finder_mach_number(gamma, tol, M0, A[i], At, is_supersonic)
+        try:
+            Mach[i] = root_finder_mach_number(gamma, tol, M0, A[i], At, is_supersonic)
+        except MachSolveError as e:
+            prog.done()
+            raise MachSolveError(
+                f'Mach solve failed at x = {x[i]:.6g} mm (A/At = {A[i] / At:.6g}): {e} '
+                'Check the nozzle geometry.') from e
 
         prog.update(i + 1)
 
@@ -84,9 +103,16 @@ def mach_number_distribution(nozzle_geometry, x, gamma, M0sub, M0super, tol,
 
     if bow_shock:
         mach_exit = Mach[exit_index]
-        L_shock = 0.143 * g[7] * np.exp(3.24 / mach_exit ** 2)
+        L_ref = STANDOFF_LENGTH_SCALES[standoff_length_scale] * g[7]
+        L_shock = 0.143 * L_ref * np.exp(3.24 / mach_exit ** 2)
         M_shock, _, _ = normal_shock(mach_exit, gamma)
         shock_index = int(np.argmin(np.abs(x - (x[-1] - L_shock))))
+        if shock_index <= exit_index:
+            raise ShockPlacementError(
+                f'The standoff distance (Ls = {g[4]:g} mm) is shorter than the bow '
+                f'shock standoff (L_shock = {L_shock:.4g} mm at M_exit = {mach_exit:.4g}), '
+                'so the shock would sit inside the nozzle. Increase the standoff '
+                'distance or turn off the bow shock.')
         Mach[shock_index:] = np.linspace(M_shock, 0.0, x.size - shock_index)
 
     return Mach, exit_index, shock_index
