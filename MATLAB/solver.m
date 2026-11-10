@@ -12,8 +12,7 @@ Dt = 1.98; % mm
 De = 3.81; % mm
 
 % Gas Parameters
-pressure0 = 900; % psi
-pressure_is_gauge = false; % true: pressure0 is psig, 1 atm is added
+pressure0 = 900; % psig (1 atm is added)
 temp0 = 650; % C
 gamma = 1.4;
 cp = 1.04; % kJ/kg*K
@@ -60,10 +59,7 @@ bow_shock = true;
 standoff_length_scale = 'diameter'; % exit dimension in Billig's correlation: 'diameter' or 'radius'
 
 % Consolidations, Calculations, and Conversions
-pressure0 = pressure0 * 6894.757;
-if pressure_is_gauge
-    pressure0 = pressure0 + 101325;
-end
+pressure0 = pressure0 * 6894.757 + 101325; % gauge -> absolute
 temp0 = temp0 + 273.15;
 dp10 = dp10*10^(-6);
 dp50 = dp50*10^(-6);

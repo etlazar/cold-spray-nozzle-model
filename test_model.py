@@ -80,7 +80,10 @@ class TestPrandtl(unittest.TestCase):
 
 
 class TestSolver(unittest.TestCase):
-    """End-to-end check on a coarse grid, which leaves the gas state unchanged."""
+    """End-to-end check on a coarse grid, which leaves the gas state unchanged.
+    The 200 psi input is gauge, so the absolute p0 (and every pressure and
+    density) is larger than the 200 psia reference values by this factor."""
+    SCALE = (P0 + P_ATM) / P0
 
     @classmethod
     def setUpClass(cls):
@@ -89,14 +92,14 @@ class TestSolver(unittest.TestCase):
     def test_exit_matches_isentropic(self):
         i = self.r.exit_index
         self.assertAlmostEqual(self.r.M[i], M_EXIT, delta=0.001)
-        self.assertAlmostEqual(self.r.pressure[i], 46440, delta=50)
+        self.assertAlmostEqual(self.r.pressure[i], 46440 * self.SCALE, delta=50)
 
     def test_post_shock_state(self):
         i = self.r.shock_index
         self.assertAlmostEqual(self.r.M[i], 0.484, delta=0.001)
         self.assertAlmostEqual(self.r.temp[i] - 273.15, 178.8, delta=0.1)
-        self.assertAlmostEqual(self.r.pressure[i], 4.35e5, delta=1e3)
-        self.assertAlmostEqual(self.r.gas_density[i], 3.24, delta=0.01)
+        self.assertAlmostEqual(self.r.pressure[i], 4.35e5 * self.SCALE, delta=1e3)
+        self.assertAlmostEqual(self.r.gas_density[i], 3.24 * self.SCALE, delta=0.01)
         e = self.r.exit_index
         flux_ratio = (self.r.gas_density[i] * self.r.v[i]) / (self.r.gas_density[e] * self.r.v[e])
         self.assertAlmostEqual(flux_ratio, 1.0, places=6)
@@ -177,13 +180,8 @@ class TestShockPlacement(unittest.TestCase):
 
 class TestGaugePressure(unittest.TestCase):
     def test_gauge_adds_one_atmosphere(self):
-        p = replace(Params(), h=0.05, vp0=None)
-        r_abs = solve(p, verbose=False)
-        r_g = solve(replace(p, pressure_is_gauge=True), verbose=False)
-        self.assertAlmostEqual(r_abs.pressure0, 200 * 6894.757, places=6)
-        self.assertAlmostEqual(r_g.pressure0 - r_abs.pressure0, P_ATM, places=6)
-        # Isentropic Mach distribution does not depend on p0
-        np.testing.assert_array_equal(r_g.M, r_abs.M)
+        r = solve(replace(Params(), h=0.05, vp0=None), verbose=False)
+        self.assertAlmostEqual(r.pressure0, 200 * 6894.757 + P_ATM, places=6)
 
 
 if __name__ == '__main__':

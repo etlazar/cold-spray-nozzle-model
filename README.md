@@ -31,7 +31,7 @@ python -m unittest test_model   # slow, runs the full solver
    - **Full nozzle profile (CSV)**: every quantity at every grid point (~200,000 rows, ~50 MB, temperatures in K).
 
 **Options:**
-- **gauge** (next to gas pressure): check if the pressure is psig; 1 atm (101325 Pa) is added. Unchecked = psia.
+- **Gas pressure** is entered as gauge (psig); 1 atm (101325 Pa) is always added to get the absolute pressure.
 - **Start particles at inlet gas velocity**: instead of 0.1 m/s. This removes the stiff start of the particle ODEs, so small particles stay stable at larger steps (D10 = 1 µm is stable at 0.01 mm).
 - `Params.standoff_length_scale` (`'diameter'` default, or `'radius'`): exit dimension used in the bow shock standoff correlation, 0.143·L·exp(3.24/M²).
 

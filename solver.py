@@ -27,8 +27,7 @@ class Params:
     De: float = 3.81              # mm
 
     # Gas Parameters
-    pressure0: float = 200.0      # psi
-    pressure_is_gauge: bool = False   # True: pressure0 is psig, add 1 atm
+    pressure0: float = 200.0      # psig (1 atm is added)
     temp0: float = 200.0          # C
     gamma: float = 1.4
     cp: float = 1.04              # kJ/kg·K
@@ -96,9 +95,7 @@ def solve(p=None, verbose=True, progress=None):
     t_start = time.perf_counter()
 
     # Consolidations, Calculations, and Conversions
-    pressure0 = p.pressure0 * PSI_TO_PA
-    if p.pressure_is_gauge:
-        pressure0 += P_ATM
+    pressure0 = p.pressure0 * PSI_TO_PA + P_ATM   # gauge -> absolute
     temp0 = p.temp0 + 273.15
     dp = {'D10': p.dp10 * 1e-6, 'D50': p.dp50 * 1e-6, 'D90': p.dp90 * 1e-6}
     p_temp0 = p.p_temp0 + 273.15

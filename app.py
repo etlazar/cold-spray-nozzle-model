@@ -29,7 +29,7 @@ from solver import VP0_REST, Params, solve
 # (attribute on Params, label, unit, min, max, decimals, step)
 INPUTS = {
     'Gas': [
-        ('pressure0', 'Gas pressure', 'psi', 0.1, 1e4, 2, 10),
+        ('pressure0', 'Gas pressure', 'psig', 0.1, 1e4, 2, 10),
         ('temp0', 'Gas temperature', '°C', -200, 3000, 2, 10),
         ('cp', 'Gas cp', 'kJ/kg·K', 0.01, 100, 4, 0.01),
     ],
@@ -143,18 +143,8 @@ class MainWindow(QMainWindow):
                 spin.setKeyboardTracking(False)
                 self.fields[attr] = spin
                 if attr == 'pressure0':
-                    # Gauge/absolute toggle sits beside the pressure input
-                    self.pressure_is_gauge = QCheckBox('gauge')
-                    self.pressure_is_gauge.setToolTip(
-                        'Checked: pressure is gauge (psig), 1 atm is added. '
-                        'Unchecked: absolute (psia).')
-                    self.pressure_is_gauge.setChecked(defaults.pressure_is_gauge)
-                    row = QHBoxLayout()
-                    row.addWidget(spin, 1)
-                    row.addWidget(self.pressure_is_gauge)
-                    form.addRow(label, row)
-                else:
-                    form.addRow(label, spin)
+                    spin.setToolTip('Gauge pressure; 1 atm is added for the absolute value.')
+                form.addRow(label, spin)
             if group_name == 'Powder':
                 self.vp0_gas = QCheckBox('Start particles at inlet gas velocity')
                 self.vp0_gas.setToolTip(
@@ -244,7 +234,6 @@ class MainWindow(QMainWindow):
     def read_params(self):
         values = {attr: spin.value() for attr, spin in self.fields.items()}
         values['bow_shock'] = self.bow_shock.isChecked()
-        values['pressure_is_gauge'] = self.pressure_is_gauge.isChecked()
         values['vp0'] = None if self.vp0_gas.isChecked() else VP0_REST
         return replace(Params(), **values)
 
@@ -253,7 +242,6 @@ class MainWindow(QMainWindow):
         for attr, spin in self.fields.items():
             spin.setValue(getattr(defaults, attr))
         self.bow_shock.setChecked(defaults.bow_shock)
-        self.pressure_is_gauge.setChecked(defaults.pressure_is_gauge)
         self.vp0_gas.setChecked(defaults.vp0 is None)
 
     def run(self):
@@ -444,7 +432,6 @@ class MainWindow(QMainWindow):
             for rows in INPUTS.values():
                 for attr, label, unit, *_ in rows:
                     w.writerow([label, unit, getattr(p, attr)])
-            w.writerow(['Gas pressure is gauge', '', p.pressure_is_gauge])
             w.writerow(['Absolute gas pressure', 'Pa', f'{r.pressure0:.8g}'])
             w.writerow(['Initial particle velocity', 'm/s',
                         'inlet gas velocity' if p.vp0 is None else p.vp0])
